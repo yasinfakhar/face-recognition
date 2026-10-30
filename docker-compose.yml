@@ -1,0 +1,14 @@
+services:
+  inference:
+    build: .
+    ports:
+      - "${INFERENCE_PORT:-8000}:8000"
+    volumes:
+      - ./faces:/app/faces:ro
+    environment:
+      FACES_DIR: /app/faces
+      INFERENCE_PORT: 8000
+      FACE_THRESHOLD: ${FACE_THRESHOLD:-0.5}
+      DETECTION_SIZE: ${DETECTION_SIZE:-640}
+      INSIGHTFACE_PROVIDER: ${INSIGHTFACE_PROVIDER:-CUDAExecutionProvider}
+    gpus: all

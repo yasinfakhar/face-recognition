@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Face Recognition Console</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar"><div><p class="eyebrow">LOCAL VISION SYSTEM</p><h1>Attendance Console</h1></div><span id="status" class="status idle">OFFLINE</span></header>
+    <section class="layout">
+      <div class="left-column">
+        <section class="panel preview-panel"><div class="panel-head"><div><p class="eyebrow">LIVE OUTPUT</p><h2>Recognition feed</h2></div><span id="source-label">No source</span></div><div class="screen"><img id="stream" src="/stream" alt="Live recognition output"><div id="empty" class="empty">Start a source to begin streaming</div></div><div class="metrics"><div><span>Recognized this session</span><strong id="recognized">0</strong></div><div><span>Last event</span><strong id="last-event">Waiting</strong></div></div></section>
+        <section class="panel"><div class="panel-head"><div><p class="eyebrow">ATTENDANCE</p><h2>Daily report</h2></div><input id="report-date" type="date"></div><div id="report-summary" class="summary">No records loaded.</div><div class="table-wrap"><table><thead><tr><th>Time</th><th>Person</th></tr></thead><tbody id="report-body"></tbody></table></div><button id="download" class="button secondary">Download CSV</button></section>
+      </div>
+      <aside class="right-column">
+        <section class="panel"><p class="eyebrow">CONTROL ROOM</p><h2>Video source</h2><label>Camera, file, or stream URL<input id="source" value="0" placeholder="0 or rtsp://..."></label><label>Audio folder<input id="audio-dir" value="audios" placeholder="/path/to/audio"></label><label>Audio player<input id="audio-player" value="ffplay"></label><div class="actions"><button id="start" class="button primary">Start feed</button><button id="stop" class="button secondary">Stop</button></div><p id="message" class="message"></p></section>
+        <section class="panel"><p class="eyebrow">PEOPLE</p><h2>Register a face</h2><form id="register"><label>Person name<input name="name" required pattern="[A-Za-z0-9_-]+" placeholder="first_last"></label><label>Reference image<input name="image" type="file" accept=".jpg,.jpeg,.png,.bmp" required></label><button class="button primary" type="submit">Register and reload</button></form><p class="hint">Use one clear, front-facing image. The inference container reloads its face index automatically.</p></section>
+      </aside>
+    </section>
+  </main>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

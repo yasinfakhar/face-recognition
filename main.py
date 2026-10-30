@@ -1,198 +1,159 @@
+"""Host-side video loop.
+
+Video capture, display, logging, and audio playback intentionally stay outside
+Docker. The container is used only as an inference service.
+"""
+
+import argparse
+import csv
 import os
+import queue
 import subprocess
 import threading
-import queue
+from datetime import datetime
+
 import cv2
-import insightface
-import numpy as np
-from insightface.app import FaceAnalysis
-try:
-    import pyttsx3
-except ImportError:  # Fallback if TTS library is not installed
-    pyttsx3 = None
-
-# Initialize face analysis model
-app = FaceAnalysis(name='buffalo_s', providers=['CUDAExecutionProvider'])  # Use 'CUDAExecutionProvider' for GPU
-app.prepare(ctx_id=0)  # ctx_id=-1 for CPU, 0 for GPU
-
-cv2.namedWindow("Webcam Face Recognition", cv2.WINDOW_NORMAL)
-
-# Global list to keep track of recognized people
-recognized_people = []
-
-# Queue and worker for background voice playback
-voice_queue: "queue.Queue[str]" = queue.Queue()
-voice_worker_started = False
-
-THRESHOLD = 0.5
-
-def get_face_embedding(image_path):
-    """Extract face embedding from an image"""
-    img = cv2.imread(image_path)
-    if img is None:
-        raise ValueError(f"Could not read image: {image_path}")
-    
-    faces = app.get(img)
-    
-    if len(faces) < 1:
-        raise ValueError("No faces detected in the image")
-    if len(faces) > 1:
-        print("Warning: Multiple faces detected. Using first detected face")
-    
-    return faces[0].embedding
-
-def compare_faces(emb1, emb2, threshold=THRESHOLD): # Adjust this threshold according to your usecase.
-    """Compare two embeddings using cosine similarity"""
-    similarity = np.dot(emb1, emb2) / (np.linalg.norm(emb1) * np.linalg.norm(emb2))
-    return similarity, similarity > threshold
-
-def load_known_faces(folder_path):
-    """Load all images from folder_path and compute their face embeddings.
-
-    The person name is inferred from the filename without extension.
-    Returns a list of (name, embedding) tuples.
-    """
-    known_embeddings = []
-    for filename in os.listdir(folder_path):
-        file_path = os.path.join(folder_path, filename)
-        if not os.path.isfile(file_path):
-            continue
-        name, ext = os.path.splitext(filename)
-        if ext.lower() not in [".jpg", ".jpeg", ".png", ".bmp"]:
-            continue
-        try:
-            emb = get_face_embedding(file_path)
-            known_embeddings.append((name, emb))
-        except Exception as e:
-            print(f"Error processing {file_path}: {e}")
-    return known_embeddings
-
-def recognize_face(face_embedding, known_embeddings, threshold=THRESHOLD):
-    """Recognize a face by comparing its embedding to known embeddings.
-
-    Returns (best_name, best_similarity). If no match, best_name is "Unknown".
-    """
-    best_name = "Unknown"
-    best_similarity = 0.0
-    for name, known_emb in known_embeddings:
-        similarity, is_same = compare_faces(face_embedding, known_emb, threshold=threshold)
-        if similarity > best_similarity and is_same:
-            best_similarity = similarity
-            best_name = name
-    return best_name, best_similarity
+import requests
 
 
-def _play_voice_file(name: str) -> None:
-    """Play the MP3 file corresponding to the given name.
-
-    Looks for an audio file in the "voices" directory named "{name}.mp3" or
-    "{name}.wav" and plays it using an external audio player inside the
-    container. If the file or player is not available, prints a message
-    instead.
-    """
-    voices_dir = "voices"
-    candidates = [f"{name}.mp3", f"{name}.wav"]
-    file_path = None
-
-    for filename in candidates:
-        candidate_path = os.path.join(voices_dir, filename)
-        if os.path.isfile(candidate_path):
-            file_path = candidate_path
-            break
-
-    if file_path is None:
-        print(f"No voice file found for {name} in {voices_dir} (tried: {', '.join(candidates)})")
-        return
-
-    try:
-        subprocess.run(
-            ["ffplay", "-nodisp", "-autoexit", file_path],
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except Exception as exc:
-        print(f"Failed to play voice for {name} from {file_path}: {exc}")
+DEFAULT_INFERENCE_URL = "http://127.0.0.1:8000/infer"
+DEFAULT_AUDIO_DIR = "audios"
+recognized_people = set()
+voice_queue = queue.Queue()
 
 
-def _voice_worker() -> None:
-    """Background worker that sequentially plays queued voice messages.
+def daily_csv_path() -> str:
+    return f"{datetime.now():%Y-%m-%d}.csv"
 
-    Consumes names from the global voice_queue and plays the corresponding
-    MP3 files one by one. This keeps audio playback off the main camera loop
-    thread while preserving the order of announcements.
-    """
+
+def log_recognized_name(name: str) -> None:
+    path = daily_csv_path()
+    if os.path.isfile(path):
+        with open(path, newline="", encoding="utf-8") as csvfile:
+            if any(row.get("name") == name for row in csv.DictReader(csvfile)):
+                return
+
+    exists = os.path.isfile(path) and os.path.getsize(path) > 0
+    with open(path, "a", newline="", encoding="utf-8") as csvfile:
+        writer = csv.writer(csvfile)
+        if not exists:
+            writer.writerow(["timestamp", "name"])
+        writer.writerow([datetime.now().isoformat(timespec="seconds"), name])
+
+
+def play_audio(name: str, audio_dir: str, player: str) -> None:
+    for extension in (".mp3", ".wav", ".ogg"):
+        path = os.path.join(audio_dir, f"{name}{extension}")
+        if os.path.isfile(path):
+            try:
+                subprocess.run(
+                    [player, "-nodisp", "-autoexit", path],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except OSError as exc:
+                print(f"Could not start audio player {player}: {exc}")
+            return
+    print(f"No audio found for {name} in {audio_dir}")
+
+
+def audio_worker(audio_dir: str, player: str) -> None:
     while True:
         name = voice_queue.get()
-        if name is None:
-            # Sentinel value to stop the worker if ever needed.
-            break
-        _play_voice_file(name)
-        voice_queue.task_done()
+        try:
+            if name is None:
+                return
+            play_audio(name, audio_dir, player)
+        finally:
+            voice_queue.task_done()
 
 
-def play_welcome_sound(name: str) -> None:
-    """Queue the welcome voice for the recognized person.
+def source_value(value: str):
+    return int(value) if value.isdigit() else value
 
-    Adds the person's name to the global voice queue so that their MP3 is
-    played in the background by the voice worker. This call is non-blocking
-    for the main camera loop.
-    """
-    voice_queue.put(name)
 
-def main():
-    """Run real-time face recognition on webcam using InsightFace."""
-    faces_folder = "faces"  # relative to this script
-    if not os.path.isdir(faces_folder):
-        raise FileNotFoundError(f"Faces folder not found: {faces_folder}")
-
-    global voice_worker_started
-
-    print(f"Loading known faces from {faces_folder}...")
-    known_embeddings = load_known_faces(faces_folder)
-    if not known_embeddings:
-        print("No valid face images found in faces folder.")
-
-    # Start the background voice worker exactly once.
-    if not voice_worker_started:
-        worker_thread = threading.Thread(target=_voice_worker, daemon=True)
-        worker_thread.start()
-        voice_worker_started = True
-
-    cap = cv2.VideoCapture(1)
-    if not cap.isOpened():
-        raise RuntimeError("Could not open webcam")
-
-    print("Press 'q' to quit.")
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        faces = app.get(frame)
+def infer(session: requests.Session, url: str, frame, max_width: int) -> list[dict]:
+    scale = min(1.0, max_width / frame.shape[1]) if max_width > 0 else 1.0
+    inference_frame = frame
+    if scale < 1.0:
+        inference_frame = cv2.resize(frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    ok, encoded = cv2.imencode(".jpg", inference_frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+    if not ok:
+        raise RuntimeError("Could not encode video frame")
+    response = session.post(
+        url,
+        data=encoded.tobytes(),
+        headers={"Content-Type": "image/jpeg"},
+        timeout=5,
+    )
+    response.raise_for_status()
+    faces = response.json().get("faces", [])
+    if scale < 1.0:
         for face in faces:
-            bbox = face.bbox.astype(int)
-            x1, y1, x2, y2 = bbox
-            emb = face.embedding
+            face["bbox"] = [round(value / scale) for value in face["bbox"]]
+    return faces
 
-            name, similarity = recognize_face(emb, known_embeddings)
-            label = f"{name} {similarity:.2f}" if name != "Unknown" else name
 
-            if name != "Unknown":
-                if name not in recognized_people:
-                    recognized_people.append(name)
-                    play_welcome_sound(name)
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Host video client for Docker face inference")
+    parser.add_argument("--source", default=os.getenv("VIDEO_SOURCE", "0"),
+                        help="Camera index, video path, or stream URL")
+    parser.add_argument("--inference-url", default=os.getenv("INFERENCE_URL", DEFAULT_INFERENCE_URL))
+    parser.add_argument("--inference-max-width", type=int,
+                        default=int(os.getenv("INFERENCE_MAX_WIDTH", "640")),
+                        help="Downscale inference frames to this width; 0 disables resizing")
+    parser.add_argument("--audio-dir", default=os.getenv("AUDIO_DIR", DEFAULT_AUDIO_DIR))
+    parser.add_argument("--audio-player", default=os.getenv("AUDIO_PLAYER", "ffplay"))
+    args = parser.parse_args()
 
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+    cap = cv2.VideoCapture(source_value(args.source))
+    if not cap.isOpened():
+        raise RuntimeError(f"Could not open video source: {args.source}")
 
-        cv2.imshow("Webcam Face Recognition", frame)
+    worker = threading.Thread(target=audio_worker, args=(args.audio_dir, args.audio_player), daemon=True)
+    worker.start()
+    session = requests.Session()
+    print(f"Reading video on host from {args.source}; inference: {args.inference_url}")
+    print("Press 'q' to quit.")
 
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                print("Video source ended or returned an invalid frame")
+                break
 
-    cap.release()
-    cv2.destroyAllWindows()
+            try:
+                faces = infer(session, args.inference_url, frame, args.inference_max_width)
+            except requests.RequestException as exc:
+                cv2.putText(frame, f"Inference unavailable: {exc}", (20, 35),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2)
+                faces = []
+
+            for result in faces:
+                x1, y1, x2, y2 = result["bbox"]
+                name = result["name"]
+                similarity = result["similarity"]
+                label = f"{name} {similarity:.2f}" if name != "Unknown" else name
+                color = (0, 255, 0) if name != "Unknown" else (0, 165, 255)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(frame, label, (x1, max(y1 - 10, 20)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+
+                if name != "Unknown" and name not in recognized_people:
+                    recognized_people.add(name)
+                    log_recognized_name(name)
+                    voice_queue.put(name)
+
+            cv2.imshow("Webcam Face Recognition", frame)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
+        voice_queue.put(None)
+
 
 if __name__ == "__main__":
     main()
