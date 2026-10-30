@@ -1,0 +1,3 @@
+# Photos of people are personal data: keep them out of git.
+phone/faces/*
+!phone/faces/.gitkeep
