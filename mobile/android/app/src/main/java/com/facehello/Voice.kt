@@ -20,11 +20,8 @@ import java.util.concurrent.Executors
  * (run on-device with sherpa-onnx). Falls back to Android's voice if KittenTTS cannot load.
  */
 object Voice {
-    /** Label for each choice in the app. KittenTTS voice order (male/female pairs) is our best reading of the model files. */
-    val CHOICES = listOf(
-        "Android default voice",
-        "1 - Jasper", "2 - Bella", "3 - Bruno", "4 - Luna", "5 - Hugo", "6 - Rosie", "7 - Leo", "8 - Kiki",
-    )
+    /** The 8 KittenTTS voices. Their order (male/female pairs) is our best reading of the model files. */
+    val CHOICES = listOf("1 - Jasper", "2 - Bella", "3 - Bruno", "4 - Luna", "5 - Hugo", "6 - Rosie", "7 - Leo", "8 - Kiki")
 
     @Volatile var status = ""   // shown in the app
     private const val TAG = "FaceHello"
@@ -37,21 +34,34 @@ object Voice {
     private var android: TextToSpeech? = null
     private var androidReady = false
 
-    fun selected(context: Context) = context.getSharedPreferences("facehello", Context.MODE_PRIVATE).getInt("voice", 0)
+    private fun prefs(context: Context) = context.getSharedPreferences("facehello", Context.MODE_PRIVATE)
 
-    /** Loads KittenTTS in the background so the first greeting is not delayed. */
+    /** True when the "Use Android's built-in voice" box is ticked: instant, but a plainer voice. */
+    fun useAndroid(context: Context) = prefs(context).getBoolean("use_android", false)
+
+    /** Which KittenTTS voice (0..7) is chosen in the list. */
+    fun kittenVoice(context: Context) = prefs(context).getInt("kitten_voice", 0).coerceIn(0, CHOICES.size - 1)
+
+    /** Gets the chosen voice ready in the background so the first greeting is not delayed. */
     fun preload(context: Context) {
         val app = context.applicationContext
-        executor.execute { if (selected(app) >= 1) loadKitten(app) }
+        executor.execute {
+            if (useAndroid(app)) {
+                status = "Using Android's built-in voice"
+                ensureAndroid(app)
+            } else {
+                loadKitten(app)
+            }
+        }
     }
 
-    fun speak(context: Context, text: String, choice: Int = selected(context)) {
+    fun speak(context: Context, text: String) {
         val app = context.applicationContext
         executor.execute {
             try {
-                if (choice >= 1) {
+                if (!useAndroid(app)) {
                     val tts = loadKitten(app)
-                    if (tts != null) { playKitten(tts, text, choice - 1); return@execute }
+                    if (tts != null) { playKitten(tts, text, kittenVoice(app)); return@execute }
                 }
                 speakAndroid(app, text)
             } catch (e: Exception) {
@@ -61,16 +71,19 @@ object Voice {
         }
     }
 
-    private fun speakAndroid(app: Context, text: String) {
-        val tts = android
-        if (tts != null && androidReady) {
-            tts.speak(text, TextToSpeech.QUEUE_ADD, null, "hello")
-        } else if (tts == null) {
-            android = TextToSpeech(app) { code ->
-                androidReady = code == TextToSpeech.SUCCESS
-                if (androidReady) android?.speak(text, TextToSpeech.QUEUE_ADD, null, "hello")
-            }
+    private var pending: String? = null
+
+    private fun ensureAndroid(app: Context) {
+        if (android != null) return
+        android = TextToSpeech(app) { code ->
+            androidReady = code == TextToSpeech.SUCCESS
+            if (androidReady) pending?.let { android?.speak(it, TextToSpeech.QUEUE_ADD, null, "hello"); pending = null }
         }
+    }
+
+    private fun speakAndroid(app: Context, text: String) {
+        ensureAndroid(app)
+        if (androidReady) android?.speak(text, TextToSpeech.QUEUE_ADD, null, "hello") else pending = text
     }
 
     private fun loadKitten(app: Context): OfflineTts? {

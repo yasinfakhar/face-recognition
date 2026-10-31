@@ -91,29 +91,37 @@ class MainActivity : Activity() {
             addView(limitCount)
             addView(TextView(this@MainActivity).apply { text = " times per person" })
         })
-        // Voice for the greetings: Android's own voice or one of the 8 KittenTTS voices
-        root.addView(TextView(this).apply { text = "Voice"; setPadding(0, pad / 2, 0, 0) })
+        // Voice for the greetings: Android's own (fast) voice, or one of the 8 KittenTTS voices (nicer, slower)
         val voiceSpinner = Spinner(this).apply {
             adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_item, Voice.CHOICES)
                 .also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
-            setSelection(Voice.selected(this@MainActivity))
+            setSelection(Voice.kittenVoice(this@MainActivity))
+            isEnabled = !Voice.useAndroid(this@MainActivity)
             onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
                 override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                    prefs.edit().putInt("voice", position).apply()
-                    if (position >= 1) Voice.preload(this@MainActivity)
+                    prefs.edit().putInt("kitten_voice", position).apply()
                 }
                 override fun onNothingSelected(parent: AdapterView<*>?) {}
             }
         }
+        root.addView(CheckBox(this).apply {
+            text = "Use Android's built-in voice (faster)"
+            isChecked = Voice.useAndroid(this@MainActivity)
+            setPadding(0, pad / 2, 0, 0)
+            setOnCheckedChangeListener { _, on ->
+                prefs.edit().putBoolean("use_android", on).apply()
+                voiceSpinner.isEnabled = !on
+                Voice.preload(this@MainActivity)
+            }
+        })
+        root.addView(TextView(this).apply { text = "KittenTTS voice"; setPadding(0, pad / 3, 0, 0) })
         root.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(voiceSpinner, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(Button(this@MainActivity).apply {
                 text = "Test voice"
-                setOnClickListener {
-                    Voice.speak(this@MainActivity, "Hello, this is a test of the greeting voice.", voiceSpinner.selectedItemPosition)
-                }
+                setOnClickListener { Voice.speak(this@MainActivity, "Hello, this is a test of the greeting voice.") }
             })
         })
         voiceStatus = TextView(this).apply { textSize = 13f }

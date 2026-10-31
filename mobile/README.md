@@ -3,7 +3,8 @@
 Turn an old Android phone into a small "door camera" that recognises people and says **"Hello <name>"** out loud.
 Everything runs on the phone: no cloud, no server, no account.
 
-Built and tested on a Galaxy S7 (Android 8). Recognition takes about 4 seconds per camera frame.
+Built and tested on a Galaxy S7 (Android 8). The Android app greets within about a second; the Termux version takes
+about 4 seconds per camera frame.
 
 ```
 android/  the Android app (fast: a greeting within about a second)
@@ -22,32 +23,75 @@ laptop/   optional Windows shortcuts for the Termux version
 Both read the same photos in `/sdcard/FaceHello/faces/` and show the same viewer page on port 8081. Do not run both
 at once: they would fight over the camera.
 
-### Android app
+## Build and run the Android app
 
-1. Open the `android` folder in Android Studio and press **Run** with the phone connected. Or from a terminal:
-   `gradlew assembleDebug` (needs a JDK and the Android SDK) and install `app/build/outputs/apk/debug/app-debug.apk`.
-2. Put photos in `/sdcard/FaceHello/faces/<Name>/1.jpg` (see "Add the people" below).
-3. Open the app, allow the camera and storage permissions, tap **Start**. Open the viewer address it shows from any
-   device on the same Wi-Fi. It keeps running in the background with a notification.
+**You need**
+- A PC with **Android Studio** (it brings the JDK and the Android SDK). Built with Android Studio 2026.2, Android Gradle
+  Plugin 9.5 and Gradle 9.8.2; the first build downloads Gradle and the libraries, so be online.
+- An Android phone, Android 8.0 or newer, 64-bit ARM (almost every phone since 2016), with **USB debugging** on
+  (Settings > About phone > tap "Build number" 7 times, then Developer options > USB debugging).
+- About 300 MB of free space on the phone (the app is about 130 MB).
 
-The app screen also has:
+**1. Get the voice files (once).** They are about 60 MB, so they are not in git. In the `android` folder run:
+
+```powershell
+.\get-tts.ps1
+```
+
+It downloads the sherpa-onnx runtime and the KittenTTS model from github.com/k2-fsa/sherpa-onnx into
+`app/libs` and `app/src/main/assets/tts`. (On macOS/Linux download the two files named in the script by hand.)
+It uses KittenTTS v0.2 nano: the newer 0.8 models need a runtime (sherpa-onnx 2.x) that no longer includes the
+espeak-ng converter they depend on.
+
+**2. Build it.** Either:
+- **Android Studio:** File > Open > the `android` folder, wait for the Gradle sync, plug in the phone and press **Run**.
+  This builds and installs in one go, so you can skip step 3.
+- **Terminal** (needs JDK 17 or newer; Android Studio's is at `C:\Program Files\Android\Android Studio\jbr`):
+
+  ```powershell
+  cd android
+  .\gradlew.bat assembleDebug        # macOS/Linux: ./gradlew assembleDebug
+  ```
+
+  The APK is `android/app/build/outputs/apk/debug/app-debug.apk`.
+
+**3. Install it** (only if you built from the terminal):
+
+```bash
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+Or copy the APK to the phone and open it (allow "install unknown apps" when asked).
+
+**4. Add the people.** Put photos on the phone in `/sdcard/FaceHello/faces/<Name>/1.jpg`, one folder per person
+(details in "Add the people it should recognise" below). Changes are picked up within about 10 seconds.
+
+**5. Run it.** Open **Face Hello**, allow the camera and storage permissions, and tap **Start**. A notification shows
+while it runs, and it keeps working with the screen off. Open the address shown in the app
+(for example `http://192.168.1.20:8081`) from any device on the same Wi-Fi to watch the camera with a box around each
+face. Tap **Stop** to end it.
+
+Tips: plug the phone in, give it a longer screen timeout, and in the phone's battery settings set Face Hello to
+"Unrestricted". The camera button switches between the back and front camera.
+
+### What the app screen offers
+
+The app screen has:
 
 - **"Limit greetings to [2] times per person"**: tick the box and set the number to greet each person at most that
   many times. The count starts again whenever you press Stop and then Start.
-- **Voice**: pick Android's built-in voice or one of the 8 [KittenTTS](https://github.com/KittenML/KittenTTS) voices
-  (they run on the phone, no internet). **Test voice** plays a sample. The first KittenTTS greeting after starting is
-  a little slower while the model loads, and a short greeting takes about 1-2 seconds to generate on an old phone.
+- **Use Android's built-in voice (faster)**: tick it to greet with the phone's normal text-to-speech, which starts
+  instantly. Leave it unticked to use one of the 8 [KittenTTS](https://github.com/KittenML/KittenTTS) voices from the
+  list below it: they sound nicer and run on the phone with no internet, but a short greeting takes about 1-2 seconds
+  to generate on an old phone, and the first one after starting is slower while the model loads. **Test voice** plays a
+  sample with whichever is selected.
 - **Recent identifications**: every time someone is recognised (at most once a minute per person) a line with the
   date and time is added on screen and appended to `/sdcard/FaceHello/log.txt`, for example
   `2026-10-31 09:41:12  Sara  (0.54)`. The number is how sure the match was.
 
-**KittenTTS download:** the voice files are about 60 MB, so they are not stored in git. Before building, run
-`.\get-tts.ps1` in the `android` folder once (PowerShell). It uses KittenTTS v0.2 nano: the newer 0.8 models need a
-newer runtime (sherpa-onnx 2.x) that no longer includes the espeak-ng converter they depend on.
+The rest of this guide describes the Termux version, which needs no PC or build tools.
 
-The rest of this guide describes the Termux version.
-
-## What you need
+## Termux version: what you need
 
 - An Android phone with a camera, on Wi-Fi (tested on Android 8; Termux itself supports Android 7 and newer)
 - The **Termux** and **Termux:API** apps, **both from F-Droid** (not the Play Store: that version is outdated)
@@ -55,7 +99,7 @@ The rest of this guide describes the Termux version.
   - https://f-droid.org/packages/com.termux.api/
 - About 300 MB of free space and an internet connection for the one-time setup
 
-## Setup (once)
+## Termux version: setup (once)
 
 1. **Install Termux and Termux:API** from F-Droid. Open Termux:API once, then allow it to use the camera:
    Android Settings > Apps > Termux:API > Permissions > Camera.
@@ -105,7 +149,7 @@ Tips: use a clear, front-facing photo with one face, good light, no sunglasses. 
 (different light or with and without glasses) make it more reliable. New photos are picked up within about 10 seconds,
 no restart needed.
 
-## Use it
+## Termux version: use it
 
 In Termux, type:
 
