@@ -248,9 +248,23 @@ class FaceEngine(context: Context) {
         fun personName(file: File, facesDir: File): String {
             val rel = file.relativeTo(facesDir).path.split(File.separatorChar)
             val raw = if (rel.size > 1) rel[0] else file.nameWithoutExtension.replace(Regex("[\\s_\\-]*\\d+$"), "").ifEmpty { file.nameWithoutExtension }
-            return raw.replace('_', ' ').replace('-', ' ').trim().split(Regex("\\s+")).joinToString(" ") {
+            return displayName(raw)
+        }
+
+        private fun displayName(raw: String) =
+            raw.replace('_', ' ').replace('-', ' ').trim().split(Regex("\\s+")).joinToString(" ") {
                 it.lowercase().replaceFirstChar { c -> c.uppercase() }
             }
+
+        /**
+         * What to say for [name]: the text in faces/<Name>/greeting.txt if that file exists (read fresh each time,
+         * "{name}" is replaced by the person's name), otherwise "Hello <name>".
+         */
+        fun greetingFor(facesDir: File, name: String): String {
+            val folder = facesDir.listFiles { f -> f.isDirectory }?.firstOrNull { displayName(it.name) == name }
+            val file = folder?.listFiles()?.firstOrNull { it.isFile && it.name.equals("greeting.txt", ignoreCase = true) }
+            val text = try { file?.readText()?.trim() } catch (e: Exception) { null }
+            return if (text.isNullOrEmpty()) "Hello $name" else text.replace("{name}", name)
         }
     }
 }

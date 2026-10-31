@@ -76,6 +76,13 @@ faces/
     1.png            ->  "Hello Ali Karimi"
 ```
 
+**Custom greeting (optional):** put a text file called `greeting.txt` in a person's folder and the phone says that text
+instead of "Hello <name>". `{name}` is replaced by their name. The file is read each time, so edits apply immediately.
+
+```
+faces/Sara/greeting.txt     ->  Good morning {name}, your coffee is ready.
+```
+
 Photo file names do not matter (`1.jpg`, `me.png`, ...). JPG, PNG and WebP all work.
 (Loose files such as `faces/sara.jpg` also work, using the file name as the name, but folders are the tidy way.)
 

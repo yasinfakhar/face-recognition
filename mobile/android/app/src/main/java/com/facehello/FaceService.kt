@@ -212,9 +212,10 @@ class FaceService : LifecycleService() {
         val now = SystemClock.elapsedRealtime()
         if (now - (lastGreeted[name] ?: -COOLDOWN_MS) < COOLDOWN_MS) return
         lastGreeted[name] = now
-        events.add(0, System.currentTimeMillis() / 1000.0 to "Hello $name")
+        val text = FaceEngine.greetingFor(facesDir, name)
+        events.add(0, System.currentTimeMillis() / 1000.0 to text)
         while (events.size > 20) events.removeAt(events.size - 1)
-        if (ttsReady) tts?.speak("Hello $name", TextToSpeech.QUEUE_ADD, null, "hello-$name")
+        if (ttsReady) tts?.speak(text, TextToSpeech.QUEUE_ADD, null, "hello-$name")
     }
 
     companion object {

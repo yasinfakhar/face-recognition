@@ -151,6 +151,22 @@ def person_name(path, faces_dir):
     return " ".join(raw.replace("_", " ").replace("-", " ").split()).title()
 
 
+def greeting_for(faces_dir, name):
+    """faces/<Name>/greeting.txt if it exists ("{name}" is replaced by the name), else "Hello <name>"."""
+    try:
+        for folder in os.listdir(faces_dir):
+            if os.path.isdir(os.path.join(faces_dir, folder)) and person_name(os.path.join(faces_dir, folder, "x"), faces_dir) == name:
+                for f in os.listdir(os.path.join(faces_dir, folder)):
+                    if f.lower() == "greeting.txt":
+                        with open(os.path.join(faces_dir, folder, f), encoding="utf-8") as fh:
+                            text = fh.read().strip()
+                        if text:
+                            return text.replace("{name}", name)
+    except OSError:
+        pass
+    return f"Hello {name}"
+
+
 def list_images(faces_dir):
     found = {}
     for root, _, files in os.walk(faces_dir):
@@ -363,8 +379,9 @@ def main():
                                 "box": [round(float(v)) for v in box]})
                 if name and time.time() - last_greeted.get(name, 0) > args.cooldown:
                     last_greeted[name] = time.time()
-                    events = ([{"ts": time.time(), "text": f"Hello {name}"}] + events)[:20]
-                    say(f"Hello {name}", not args.no_speech)
+                    text = greeting_for(faces_dir, name)
+                    events = ([{"ts": time.time(), "text": text}] + events)[:20]
+                    say(text, not args.no_speech)
             LATEST["jpg"] = raw
             LATEST["status"] = {"ts": time.time(), "width": frame.shape[1], "height": frame.shape[0],
                                 "faces": results, "events": events, "known": sorted(known),
