@@ -318,6 +318,7 @@ def main():
     ap.add_argument("--camera", type=int, default=0, help="phone camera for camera mode: 0 = back, 1 = front")
     ap.add_argument("--interval", type=float, default=0.2, help="seconds to pause between captures")
     ap.add_argument("--cooldown", type=float, default=60, help="seconds before greeting the same person again")
+    ap.add_argument("--max-greetings", type=int, default=0, help="greet each person at most this many times (0 = no limit)")
     ap.add_argument("--no-speech", action="store_true", help="print only, no text-to-speech")
     ap.add_argument("--test", metavar="IMAGE", help="identify faces in one image file and exit")
     ap.add_argument("--port", type=int, default=8081, help="port for the viewer feed")
@@ -340,6 +341,7 @@ def main():
     start_viewer_server(args.port)
     rot = 0
     last_greeted = {}
+    greeted_count = {}
     events = []
     last_scan = time.time()
     grabber = FrameGrabber(args.source, args.camera, args.interval)
@@ -377,8 +379,11 @@ def main():
                 name, sim = identify(known, embed(m, frame, lm))
                 results.append({"name": name, "similarity": round(sim, 3), "detector": round(score, 2),
                                 "box": [round(float(v)) for v in box]})
+                if name and args.max_greetings and greeted_count.get(name, 0) >= args.max_greetings:
+                    continue
                 if name and time.time() - last_greeted.get(name, 0) > args.cooldown:
                     last_greeted[name] = time.time()
+                    greeted_count[name] = greeted_count.get(name, 0) + 1
                     text = greeting_for(faces_dir, name)
                     events = ([{"ts": time.time(), "text": text}] + events)[:20]
                     say(text, not args.no_speech)

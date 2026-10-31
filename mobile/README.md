@@ -30,6 +30,21 @@ at once: they would fight over the camera.
 3. Open the app, allow the camera and storage permissions, tap **Start**. Open the viewer address it shows from any
    device on the same Wi-Fi. It keeps running in the background with a notification.
 
+The app screen also has:
+
+- **"Limit greetings to [2] times per person"**: tick the box and set the number to greet each person at most that
+  many times. The count starts again whenever you press Stop and then Start.
+- **Voice**: pick Android's built-in voice or one of the 8 [KittenTTS](https://github.com/KittenML/KittenTTS) voices
+  (they run on the phone, no internet). **Test voice** plays a sample. The first KittenTTS greeting after starting is
+  a little slower while the model loads, and a short greeting takes about 1-2 seconds to generate on an old phone.
+- **Recent identifications**: every time someone is recognised (at most once a minute per person) a line with the
+  date and time is added on screen and appended to `/sdcard/FaceHello/log.txt`, for example
+  `2026-10-31 09:41:12  Sara  (0.54)`. The number is how sure the match was.
+
+**KittenTTS download:** the voice files are about 60 MB, so they are not stored in git. Before building, run
+`.\get-tts.ps1` in the `android` folder once (PowerShell). It uses KittenTTS v0.2 nano: the newer 0.8 models need a
+newer runtime (sherpa-onnx 2.x) that no longer includes the espeak-ng converter they depend on.
+
 The rest of this guide describes the Termux version.
 
 ## What you need
@@ -115,6 +130,7 @@ Add these after `face`, for example `face --camera 1 --threshold 0.3`:
 | `--camera 1` | Use the front camera (default `0`, the back camera) |
 | `--threshold 0.3` | Lower = easier to match but more mistakes (default `0.363`). Use this if it does not recognise you |
 | `--cooldown 120` | Seconds before greeting the same person again (default 60) |
+| `--max-greetings 2` | Greet each person at most 2 times, then stay quiet (default `0` = no limit) |
 | `--no-speech` | Print only, do not speak |
 
 ## Troubleshooting

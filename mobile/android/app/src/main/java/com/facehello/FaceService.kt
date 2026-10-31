@@ -8,7 +8,6 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.os.PowerManager
 import android.os.SystemClock
-import android.speech.tts.TextToSpeech
 import android.util.Log
 import android.util.Size
 import androidx.camera.core.CameraSelector
@@ -20,6 +19,9 @@ import androidx.lifecycle.LifecycleService
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.Executors
 
 /** Keeps the camera open, recognises faces on every frame and says hello. Runs as a foreground service. */
@@ -28,8 +30,6 @@ class FaceService : LifecycleService() {
     private val worker = Executors.newSingleThreadExecutor()
     private var engine: FaceEngine? = null
     private var server: ViewerServer? = null
-    private var tts: TextToSpeech? = null
-    private var ttsReady = false
     private var wakeLock: PowerManager.WakeLock? = null
 
     @Volatile private var known: Map<String, List<FloatArray>> = emptyMap()
@@ -40,6 +40,8 @@ class FaceService : LifecycleService() {
     private var extraRot = 0        // extra rotation if the phone is mounted sideways
     private var emptyFrames = 0
     private val lastGreeted = HashMap<String, Long>()
+    private val greetCount = HashMap<String, Int>()
+    private val lastLogged = HashMap<String, Long>()
     private val events = ArrayList<Pair<Double, String>>()
     private val facesDir = File(FACES_DIR)
 
@@ -48,7 +50,7 @@ class FaceService : LifecycleService() {
         startForeground(1, buildNotification())
         wakeLock = (getSystemService(Context.POWER_SERVICE) as PowerManager)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "facehello:service").apply { acquire() }
-        tts = TextToSpeech(this) { status -> ttsReady = status == TextToSpeech.SUCCESS }
+        Voice.preload(this)
         FaceState.summary = "Loading models..."
         worker.execute {
             try {
@@ -71,7 +73,6 @@ class FaceService : LifecycleService() {
     override fun onDestroy() {
         ProcessCameraProvider.getInstance(this).get().unbindAll()
         server?.stop()
-        tts?.shutdown()
         wakeLock?.release()
         analysisExecutor.shutdownNow()
         worker.shutdownNow()
@@ -190,7 +191,10 @@ class FaceService : LifecycleService() {
                 put("detector", Math.round(face.score * 100) / 100.0)
                 put("box", JSONArray(face.box.map { Math.round(it) }))
             })
-            if (name != null) greet(name)
+            if (name != null) {
+                logIdentification(name, bestScore)
+                greet(name)
+            }
         }
 
         val ts = System.currentTimeMillis() / 1000.0
@@ -208,18 +212,39 @@ class FaceService : LifecycleService() {
             if (enrolling) " (reading photos...)" else ""
     }
 
+    /** Records when a person was recognised (at most once a minute per person), in the app and in LOG_FILE. */
+    private fun logIdentification(name: String, similarity: Float) {
+        val now = SystemClock.elapsedRealtime()
+        if (now - (lastLogged[name] ?: -LOG_GAP_MS) < LOG_GAP_MS) return
+        lastLogged[name] = now
+        val line = "${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())}  $name  (${"%.2f".format(Locale.US, similarity)})"
+        FaceState.log.add(0, line)
+        while (FaceState.log.size > 50) FaceState.log.removeAt(FaceState.log.size - 1)
+        try {
+            File(LOG_FILE).apply { parentFile?.mkdirs() }.appendText(line + "\n")
+        } catch (e: Exception) {
+            Log.e(TAG, "could not write $LOG_FILE", e)
+        }
+    }
+
     private fun greet(name: String) {
+        // Optional limit from the app screen: at most N greetings per person until the service is restarted
+        val prefs = getSharedPreferences("facehello", MODE_PRIVATE)
+        if (prefs.getBoolean("limit_on", false) && (greetCount[name] ?: 0) >= prefs.getInt("limit_n", 2)) return
         val now = SystemClock.elapsedRealtime()
         if (now - (lastGreeted[name] ?: -COOLDOWN_MS) < COOLDOWN_MS) return
         lastGreeted[name] = now
+        greetCount[name] = (greetCount[name] ?: 0) + 1
         val text = FaceEngine.greetingFor(facesDir, name)
         events.add(0, System.currentTimeMillis() / 1000.0 to text)
         while (events.size > 20) events.removeAt(events.size - 1)
-        if (ttsReady) tts?.speak(text, TextToSpeech.QUEUE_ADD, null, "hello-$name")
+        Voice.speak(this, text)
     }
 
     companion object {
         const val FACES_DIR = "/sdcard/FaceHello/faces"
+        const val LOG_FILE = "/sdcard/FaceHello/log.txt"
+        private const val LOG_GAP_MS = 60_000L     // log the same person at most once a minute
         const val PORT = 8081
         private const val TAG = "FaceHello"
         private const val CHANNEL = "facehello"

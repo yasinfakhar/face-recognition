@@ -21,7 +21,9 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    androidResources { noCompress += "onnx" }
+    androidResources { noCompress += listOf("onnx", "bin") }
+    // 64-bit ARM phones only (the S7 and nearly everything since); also avoids duplicate x86 libraries
+    packaging { jniLibs { excludes += listOf("lib/x86/**", "lib/x86_64/**", "lib/armeabi-v7a/**") } }
     lint { abortOnError = false }
 }
 
@@ -34,4 +36,7 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:1.3.4")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
     implementation("org.nanohttpd:nanohttpd:2.3.1")
+    // KittenTTS runtime (sherpa-onnx with espeak-ng); fetch it with get-tts.ps1. The "static-link" build avoids clashing
+    // with the ONNX Runtime used for face recognition.
+    implementation(files("libs/sherpa-onnx-static-link-onnxruntime-1.13.8.aar"))
 }
