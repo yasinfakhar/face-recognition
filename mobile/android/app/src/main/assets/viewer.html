@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Face Hello Viewer</title>
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --text:#1c1e21; --muted:#6b7280; --line:#e2e5ea; --ok:#15803d; --bad:#b91c1c; --warn:#b45309; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#101215; --card:#1a1d21; --text:#e8eaed; --muted:#9aa0a6; --line:#2c3036; --ok:#4ade80; --bad:#f87171; --warn:#fbbf24; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.4 system-ui, sans-serif; }
+  main { max-width:1100px; margin:0 auto; padding:16px; display:grid; gap:16px; grid-template-columns: 1fr 300px; }
+  @media (max-width:800px) { main { grid-template-columns: 1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  h1 { font-size:18px; margin:0 0 12px; grid-column:1/-1; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:0 0 8px; }
+  .stage { position:relative; background:#000; border-radius:8px; overflow:hidden; min-height:200px; }
+  canvas { display:block; width:100%; height:auto; }
+  .empty { position:absolute; inset:0; display:grid; place-items:center; color:#aaa; text-align:center; padding:20px; }
+  .row { display:flex; gap:8px; align-items:center; margin-bottom:10px; }
+  input { flex:1; min-width:0; padding:7px 9px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--text); font:inherit; }
+  button { padding:7px 12px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--text); font:inherit; cursor:pointer; }
+  .pill { display:inline-block; padding:2px 10px; border-radius:99px; font-size:13px; font-weight:600; border:1px solid currentColor; }
+  .ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--warn); }
+  ul { list-style:none; margin:0; padding:0; }
+  li { padding:6px 0; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; gap:8px; }
+  li:last-child { border-bottom:0; }
+  .muted { color:var(--muted); font-size:13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Face Hello Viewer</h1>
+
+  <section class="card">
+    <div class="row">
+      <label for="host" class="muted">Phone address</label>
+      <input id="host" value="192.168.70.142" spellcheck="false">
+      <button id="go">Connect</button>
+    </div>
+    <div class="stage">
+      <canvas id="cv" width="640" height="480"></canvas>
+      <div class="empty" id="empty">Waiting for the phone...</div>
+    </div>
+    <p class="muted" id="meta"></p>
+  </section>
+
+  <aside style="display:grid; gap:16px; align-content:start;">
+    <section class="card">
+      <h2>Status</h2>
+      <span class="pill" id="state">Connecting</span>
+      <p class="muted" id="statedetail" style="margin:8px 0 0"></p>
+    </section>
+    <section class="card">
+      <h2>Faces in view</h2>
+      <ul id="faces"><li class="muted">None</li></ul>
+    </section>
+    <section class="card">
+      <h2>Known people</h2>
+      <p id="known" class="muted" style="margin:0">-</p>
+    </section>
+    <section class="card">
+      <h2>Greetings</h2>
+      <ul id="events"><li class="muted">None yet</li></ul>
+    </section>
+  </aside>
+</main>
+
+<script>
+const PORT = 8081;
+const $ = id => document.getElementById(id);
+const cv = $("cv"), ctx = cv.getContext("2d");
+let base = "", lastTs = 0, timer = null, fails = 0;
+
+try { const saved = localStorage.getItem("phoneHost"); if (saved) $("host").value = saved; } catch (e) {}
+if (location.protocol.startsWith("http")) $("host").value = location.hostname; // served by the phone itself
+if (location.hash.length > 1) $("host").value = decodeURIComponent(location.hash.slice(1));
+
+function connect() {
+  const host = $("host").value.trim();
+  try { localStorage.setItem("phoneHost", host); } catch (e) {}
+  base = `http://${host}:${PORT}`;
+  lastTs = 0; fails = 0;
+  clearInterval(timer);
+  poll();
+  timer = setInterval(poll, 700);
+}
+
+function setState(text, cls, detail) {
+  const el = $("state");
+  el.textContent = text; el.className = "pill " + cls;
+  $("statedetail").textContent = detail || "";
+}
+
+function drawFrame(img, status) {
+  cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+  ctx.drawImage(img, 0, 0);
+  const lw = Math.max(2, cv.width / 300), fs = Math.max(14, cv.width / 40);
+  ctx.lineWidth = lw; ctx.font = `bold ${fs}px system-ui, sans-serif`; ctx.textBaseline = "top";
+  for (const f of status.faces) {
+    const [x, y, w, h] = f.box, known = !!f.name;
+    const color = known ? "#22c55e" : "#f59e0b";
+    const label = (known ? f.name : "Unknown") + "  " + f.similarity.toFixed(2);
+    ctx.strokeStyle = color; ctx.strokeRect(x, y, w, h);
+    const tw = ctx.measureText(label).width + 10;
+    ctx.fillStyle = color; ctx.fillRect(x, Math.max(0, y - fs - 6), tw, fs + 6);
+    ctx.fillStyle = "#000"; ctx.fillText(label, x + 5, Math.max(0, y - fs - 6) + 3);
+  }
+}
+
+function render(status) {
+  const facesEl = $("faces");
+  facesEl.innerHTML = "";
+  if (!status.faces.length) facesEl.innerHTML = '<li class="muted">None</li>';
+  for (const f of status.faces) {
+    const li = document.createElement("li");
+    const left = document.createElement("span");
+    left.textContent = f.name || "Unknown";
+    const right = document.createElement("span");
+    right.className = f.name ? "ok" : "warn";
+    right.textContent = `${f.similarity.toFixed(2)} (min ${status.threshold})`;
+    li.append(left, right); facesEl.append(li);
+  }
+  $("known").textContent = status.known.length ? status.known.join(", ") : "No one enrolled. Add photos to /sdcard/FaceHello/faces/";
+  const ev = $("events");
+  ev.innerHTML = "";
+  if (!status.events.length) ev.innerHTML = '<li class="muted">None yet</li>';
+  for (const e of status.events) {
+    const li = document.createElement("li");
+    const a = document.createElement("span"); a.textContent = e.text;
+    const b = document.createElement("span"); b.className = "muted";
+    b.textContent = new Date(e.ts * 1000).toLocaleTimeString();
+    li.append(a, b); ev.append(li);
+  }
+  $("meta").textContent = `Frame ${status.width}x${status.height}, updated ${new Date(status.ts * 1000).toLocaleTimeString()}`;
+}
+
+async function poll() {
+  try {
+    const res = await fetch(base + "/status.json", { cache: "no-store" });
+    const status = await res.json();
+    fails = 0;
+    if (!status.ts) { setState("Waiting", "warn", "Script is up but has not analysed a frame yet. Is IP Webcam running?"); return; }
+    if (status.ts === lastTs) { return; }
+    lastTs = status.ts;
+    const img = new Image();
+    img.onload = () => { drawFrame(img, status); $("empty").style.display = "none"; };
+    img.src = `${base}/frame.jpg?t=${status.ts}`;
+    render(status);
+    const found = status.faces.find(f => f.name);
+    setState(found ? "Recognised: " + found.name : status.faces.length ? "Face seen, not recognised" : "Running, no face",
+             found ? "ok" : "warn", "");
+    window.__lastSeen = Date.now();
+  } catch (e) {
+    fails++;
+    if (fails >= 2) setState("Not reachable", "bad", `Cannot reach ${base}. Is facehello.py running on the phone, and are both on the same network (or Tailscale)?`);
+  }
+}
+
+setInterval(() => {
+  if (window.__lastSeen && Date.now() - window.__lastSeen > 6000 && fails === 0)
+    setState("Stalled", "bad", "Connected, but no new frames for 6s. Check that IP Webcam is still running.");
+}, 2000);
+
+$("go").addEventListener("click", connect);
+$("host").addEventListener("keydown", e => { if (e.key === "Enter") connect(); });
+connect();
+</script>
+</body>
+</html>
